@@ -1,0 +1,1225 @@
+.advBank);
+  document.getElementById('sCashPurch').textContent = fmt(t.cashPurch);
+  document.getElementById('sBankPurch').textContent = fmt(t.bankPurch);
+  document.getElementById('sCashExp').textContent = fmt(t.cashExp);
+  document.getElementById('sBankExp').textContent = fmt(t.bankExp);
+  document.getElementById('sPending').textContent = fmt(totalPendingAllClients());
+  document.getElementById('sPayable').textContent = fmt(totalPayableAllVendors());
+
+  const salesBody = document.getElementById('salesTableBody');
+  salesBody.innerHTML = t.salesInRange.length ? t.salesInRange.map(e=>{
+    const status = saleStatus(e);
+    const badge = status==='paid' ? 'Paid' : (status==='partial' ? 'Partial' : 'Pending');
+    return `<tr><td>${e.date}</td><td>${e.client||'-'}</td><td>${e.itemType||'-'}</td><td>${e.qty?fmt(e.qty):'-'}</td><td>${e.rate?fmt(e.rate):'-'}</td><td>${badge}</td><td style="text-align:right;">${fmt(e.amount)}</td></tr>`;
+  }).join('') : `<tr><td colspan="7" class="empty">No sales in this range</td></tr>`;
+
+  const purchBody = document.getElementById('purchTableBody');
+  purchBody.innerHTML = t.purchasesInRange.length ? t.purchasesInRange.map(e=>{
+    const status = purchaseStatus(e);
+    const badge = status==='paid' ? 'Paid' : (status==='partial' ? 'Partial' : 'Pending');
+    return `<tr><td>${e.date}</td><td>${e.vendor||'-'}</td><td>${e.itemType||'-'}</td><td>${e.qty?fmt(e.qty):'-'}</td><td>${e.rate?fmt(e.rate):'-'}</td><td>${badge}</td><td style="text-align:right;">${fmt(e.amount)}</td></tr>`;
+  }).join('') : `<tr><td colspan="7" class="empty">No purchases in this range</td></tr>`;
+
+  const expBody = document.getElementById('expTableBody');
+  expBody.innerHTML = t.expInRange.length ? t.expInRange.map(e=>{
+    const linkedNote = e.linkedSaleId ? ' (from sale #'+e.linkedSaleId+')' : '';
+    const acctNote = (e.method==='bank' && e.bankAccountId) ? ' · '+accountName(e.bankAccountId) : '';
+    return `<tr><td>${e.date}</td><td>${e.expenseType||'-'}</td><td>${e.method==='cash'?'Cash':'Bank'}${acctNote}</td><td>${(e.note||'-')+linkedNote}</td><td style="text-align:right;">${fmt(e.amount)}</td></tr>`;
+  }).join('') : `<tr><td colspan="5" class="empty">No expenses in this range</td></tr>`;
+}
+
+/* ============================= ALL ENTRIES ============================= */
+const ALL_ENTRIES_PAGE_SIZE = 50;
+let allEntriesShown = ALL_ENTRIES_PAGE_SIZE;
+
+function setAllRange(mode){
+  const today = todayStr();
+  let from = today, to = today;
+  if(mode === 'week'){
+    from = addDays(today, -6);
+  } else if(mode === 'month'){
+    const d = new Date(today + 'T00:00:00');
+    from = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-01';
+  } else if(mode === 'all'){
+    document.getElementById('allFrom').value = '';
+    document.getElementById('allTo').value = '';
+    resetAllEntriesPage();
+    return;
+  }
+  document.getElementById('allFrom').value = from;
+  document.getElementById('allTo').value = to;
+  resetAllEntriesPage();
+}
+function resetAllEntriesPage(){
+  allEntriesShown = ALL_ENTRIES_PAGE_SIZE;
+  renderAllEntries();
+}
+function matchesAllFilters(row){
+  const q = (document.getElementById('allSearch').value || '').trim().toLowerCase();
+  const from = document.getElementById('allFrom').value;
+  const to = document.getElementById('allTo').value;
+  if(from && row.date < from) return false;
+  if(to && row.date > to) return false;
+  if(q){
+    const hay = ((row.client||'') + ' ' + (row.vendor||'') + ' ' + (row.label||'') + ' ' + (row.note||'')).toLowerCase();
+    if(hay.indexOf(q) === -1) return false;
+  }
+  return true;
+}
+
+function renderAllEntries(){
+  const list = document.getElementById('list');
+  const rows = [];
+  entries.forEach(e=>{
+    if(e.kind==='sale'){
+      const status = saleStatus(e);
+      const badgeClass = status==='paid'?'badge-paid':(status==='partial'?'badge-partial':'badge-pending');
+      const badgeText = status==='paid'?'PAID':(status==='partial'?'PARTIAL':'PENDING');
+      const itemLine = e.itemType ? `${e.itemType} · ${fmt(e.qty||0)} @ ${fmt(e.rate||0)}` : '';
+      const lastPay = lastPaymentDate(e.id);
+      rows.push({
+        sortKey: e.id, date: e.date, client: e.client, vendor: '', note: e.note, label: 'Sale',
+        html: `<div class="entry">
+          <div>
+            <div>Sale${e.client?' · '+e.client:''} <span class="badge ${badgeClass}">${badgeText}</span></div>
+            <div class="meta">${e.date}${itemLine?' · '+itemLine:''}${e.note?' · '+e.note:''}${lastPay?' · last payment '+lastPay:''}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span class="amt-in">+${fmt(e.amount)}</span>
+            ${status!=='paid' ? `<button class="mini-btn" style="background:var(--amber);" onclick="openPayModal(${e.id})">Record Payment</button>` : ''}
+            ${isAdmin() ? `<button class="del" onclick="delEntry(${e.id})">✕</button>` : ''}
+          </div>
+        </div>`
+      });
+    } else if(e.kind==='purchase'){
+      const status = purchaseStatus(e);
+      const badgeClass = status==='paid'?'badge-paid':(status==='partial'?'badge-partial':'badge-pending');
+      const badgeText = status==='paid'?'PAID':(status==='partial'?'PARTIAL':'PENDING');
+      const itemLine = e.itemType ? `${e.itemType} · ${fmt(e.qty||0)} @ ${fmt(e.rate||0)}` : '';
+      const lastPay = lastPaymentDate(e.id);
+      rows.push({
+        sortKey: e.id, date: e.date, client: '', vendor: e.vendor, note: e.note, label: 'Purchase',
+        html: `<div class="entry">
+          <div>
+            <div>Purchase <span class="badge badge-purchase">PURCHASE</span>${e.vendor?' · '+e.vendor:''} <span class="badge ${badgeClass}">${badgeText}</span></div>
+            <div class="meta">${e.date}${itemLine?' · '+itemLine:''}${e.note?' · '+e.note:''}${lastPay?' · last payment '+lastPay:''}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span class="amt-out">-${fmt(e.amount)}</span>
+            ${status!=='paid' ? `<button class="mini-btn" style="background:var(--amber);" onclick="openPayModal(${e.id})">Pay Vendor</button>` : ''}
+            ${isAdmin() ? `<button class="del" onclick="delEntry(${e.id})">✕</button>` : ''}
+          </div>
+        </div>`
+      });
+    } else {
+      const linkedNote = e.linkedSaleId ? ` (loading/unloading for sale #${e.linkedSaleId})` : '';
+      const acctNote = (e.method==='bank' && e.bankAccountId) ? ` · ${accountName(e.bankAccountId)}` : '';
+      rows.push({
+        sortKey: e.id, date: e.date, client: '', vendor: '', note: e.note, label: 'Expense ' + (e.expenseType||''),
+        html: `<div class="entry">
+          <div>
+            <div>${e.method==='cash'?'Cash Expense':'Bank Expense'}${e.expenseType?' · '+e.expenseType:''}${acctNote}</div>
+            <div class="meta">${e.date}${e.note?' · '+e.note:''}${linkedNote}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span class="amt-out">-${fmt(e.amount)}</span>
+            ${isAdmin() ? `<button class="del" onclick="delEntry(${e.id})">✕</button>` : ''}
+          </div>
+        </div>`
+      });
+    }
+  });
+  advances.forEach(a=>{
+    const acctNote = (a.method==='bank' && a.bankAccountId) ? ` · ${accountName(a.bankAccountId)}` : '';
+    rows.push({
+      sortKey: a.id + 0.5, date: a.date, client: a.client, vendor: '', note: a.note, label: 'Advance',
+      html: `<div class="entry">
+        <div>
+          <div>Advance Received <span class="badge badge-advance">ADVANCE</span> · ${a.client}</div>
+          <div class="meta">${a.date}${a.note?' · '+a.note:''} · via ${a.method}${acctNote}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span class="amt-in">+${fmt(a.amount)}</span>
+          ${isAdmin() ? `<button class="del" onclick="delAdvance(${a.id})">✕</button>` : ''}
+        </div>
+      </div>`
+    });
+  });
+  adjustments.forEach(a=>{
+    rows.push({
+      sortKey: a.id + 0.7, date: a.date, client: a.client, vendor: '', note: a.note, label: 'Adjustment ' + a.adjType,
+      html: `<div class="entry">
+        <div>
+          <div>Adjustment: ${a.adjType} · ${a.client}</div>
+          <div class="meta">${a.date}${a.note?' · '+a.note:''}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span class="amt-out">-${fmt(a.amount)}</span>
+          ${isAdmin() ? `<button class="del" onclick="delAdjustment(${a.id})">✕</button>` : ''}
+        </div>
+      </div>`
+    });
+  });
+
+  const filtered = rows.filter(matchesAllFilters).sort((a,b)=>b.sortKey-a.sortKey);
+  const total = filtered.length;
+  const hint = document.getElementById('allCountHint');
+  hint.textContent = total === 0
+    ? ''
+    : ('Showing ' + Math.min(allEntriesShown, total) + ' of ' + total + ' matching entries');
+
+  if(total === 0){
+    list.innerHTML = '<div class="empty">No matching entries</div>';
+    return;
+  }
+
+  const visible = filtered.slice(0, allEntriesShown);
+  let html = visible.map(r=>r.html).join('');
+
+  if(total > allEntriesShown){
+    const remaining = total - allEntriesShown;
+    html += `<div style="text-align:center;padding:12px 0;">
+      <button class="mini-btn" style="background:var(--accent);padding:8px 16px;font-size:12px;"
+              onclick="showMoreAllEntries()">
+        Show ${Math.min(ALL_ENTRIES_PAGE_SIZE, remaining)} more
+        <span style="opacity:0.75;">(${remaining} older)</span>
+      </button>
+    </div>`;
+  } else if(total > ALL_ENTRIES_PAGE_SIZE){
+    html += `<div style="text-align:center;padding:10px 0;color:var(--muted);font-size:11px;">
+      Showing all ${total} matching entries
+    </div>`;
+  }
+
+  list.innerHTML = html;
+}
+
+function showMoreAllEntries(){
+  allEntriesShown += ALL_ENTRIES_PAGE_SIZE;
+  renderAllEntries();
+}
+
+/* ============================= CLIENT LEDGER ============================= */
+function renderLedger(){
+  const box = document.getElementById('ledger');
+  const title = document.getElementById('ledgerTitle');
+  const searchBox = document.getElementById('clientSearch');
+
+  if(openClient){
+    searchBox.style.display = 'none';
+    const c = openClient;
+    title.innerHTML = `<span style="cursor:pointer;color:var(--accent);" onclick="backToClients()">← Clients</span> · ${c}`;
+
+    const sales = entries.filter(e=>e.kind==='sale' && e.client===c).sort((a,b)=>b.id-a.id);
+    const advList = advances.filter(a=>a.client===c).sort((a,b)=>b.id-a.id);
+    const adjList = adjustments.filter(a=>a.client===c).sort((a,b)=>b.id-a.id);
+
+    const gross = clientGrossPending(c);
+    const adjTotal = clientAdjustmentTotal(c);
+    const net = clientNetPending(c);
+    const advBal = clientAdvanceBalance(c);
+
+    let html = `
+      <div class="stat"><span>Total Billed</span><span class="v">${fmt(sales.reduce((s,e)=>s+e.amount,0))}</span></div>
+      <div class="stat"><span>Gross Pending (bills)</span><span class="v">${fmt(gross)}</span></div>
+      <div class="stat"><span>Adjustments (discount/TDS/etc.)</span><span class="v">-${fmt(adjTotal)}</span></div>
+      <div class="stat pending"><span><b>Net Pending</b></span><span class="v">${fmt(net)}</span></div>
+      <div class="stat"><span>Advance Balance Available</span><span class="v" style="color:var(--purple);">${fmt(advBal)}</span></div>
+      <div class="grid2" style="margin-top:10px;">
+        <button class="link-btn" style="background:var(--bg);" onclick="openAdjModal('${c.replace(/'/g,"\\'")}')">+ Add Adjustment</button>
+        <button class="link-btn" style="background:var(--bg);" onclick="quickAddAdvance('${c.replace(/'/g,"\\'")}')">+ Add Advance</button>
+      </div>
+      <b style="font-size:13px;display:block;margin-top:14px;">Bills</b>`;
+
+    html += sales.length ? sales.map(e=>{
+      const status = saleStatus(e);
+      const bal = saleBalance(e);
+      const badgeClass = status==='paid'?'badge-paid':(status==='partial'?'badge-partial':'badge-pending');
+      const badgeText = status==='paid'?'PAID':(status==='partial'?'PARTIAL ('+fmt(bal)+' due)':'PENDING');
+      return `<div class="entry">
+        <div><div>${e.itemType||''} · ${fmt(e.qty||0)} @ ${fmt(e.rate||0)} <span class="badge ${badgeClass}">${badgeText}</span></div>
+        <div class="meta">${e.date}${e.note?' · '+e.note:''}</div></div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span style="font-weight:700;">${fmt(e.amount)}</span>
+          ${status!=='paid' ? `<button class="mini-btn" style="background:var(--amber);" onclick="openPayModal(${e.id})">Pay</button>` : ''}
+        </div>
+      </div>`;
+    }).join('') : '<div class="empty">No bills yet</div>';
+
+    html += `<b style="font-size:13px;display:block;margin-top:14px;">Advances</b>`;
+    html += advList.length ? advList.map(a=>{
+      const acctNote = (a.method==='bank' && a.bankAccountId) ? ` · ${accountName(a.bankAccountId)}` : '';
+      return `<div class="entry">
+        <div><div>Advance via ${a.method}${acctNote}</div><div class="meta">${a.date}${a.note?' · '+a.note:''}</div></div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span class="amt-in">+${fmt(a.amount)}</span>
+          ${isAdmin() ? `<button class="del" onclick="delAdvance(${a.id})">✕</button>` : ''}
+        </div>
+      </div>`;
+    }).join('') : '<div class="empty">No advances</div>';
+
+    html += `<b style="font-size:13px;display:block;margin-top:14px;">Adjustments</b>`;
+    html += adjList.length ? adjList.map(a=>`<div class="entry">
+        <div><div>${a.adjType}</div><div class="meta">${a.date}${a.note?' · '+a.note:''}</div></div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span class="amt-out">-${fmt(a.amount)}</span>
+          ${isAdmin() ? `<button class="del" onclick="delAdjustment(${a.id})">✕</button>` : ''}
+        </div>
+      </div>`).join('') : '<div class="empty">No adjustments</div>';
+
+    box.innerHTML = html;
+    return;
+  }
+
+  searchBox.style.display = 'block';
+  title.textContent = 'Client Ledger';
+  const q = searchBox.value.trim().toLowerCase();
+  let names = allClientsWithActivity();
+  if(q) names = names.filter(n=>n.toLowerCase().includes(q));
+  names.sort();
+  if(names.length===0){ box.innerHTML = `<div class="empty">${q?'No matching clients':'No client activity yet'}</div>`; return; }
+  box.innerHTML = names.map(name=>{
+    const net = clientNetPending(name);
+    const advBal = clientAdvanceBalance(name);
+    return `<div class="entry" style="cursor:pointer;" onclick="openClientView('${name.replace(/'/g,"\\'")}')">
+      <div><b>${name}</b>${advBal>0.005 ? `<div class="meta" style="color:var(--purple);">Advance: ${fmt(advBal)}</div>` : ''}</div>
+      <div style="${net>0.005?'color:var(--amber);font-weight:700;':'color:var(--green);'}">${net>0.005 ? 'Pending '+fmt(net) : 'Settled'}</div>
+    </div>`;
+  }).join('');
+}
+function openClientView(name){ openClient = name; renderLedger(); }
+function backToClients(){ openClient = null; renderLedger(); }
+function quickAddAdvance(clientName){
+  switchTab('ledger'); openClientView(clientName);
+  setKind('advance');
+  document.getElementById('client').value = clientName;
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+
+/* ============================= VENDOR LEDGER ============================= */
+function renderVendorLedger(){
+  const box = document.getElementById('vendorLedger');
+  const title = document.getElementById('vendorTitle');
+  const searchBox = document.getElementById('vendorSearch');
+
+  if(openVendor){
+    searchBox.style.display = 'none';
+    const v = openVendor;
+    title.innerHTML = `<span style="cursor:pointer;color:var(--accent);" onclick="backToVendors()">← Vendors</span> · ${v}`;
+
+    const purchases = entries.filter(e=>e.kind==='purchase' && e.vendor===v).sort((a,b)=>b.id-a.id);
+
+    const gross = vendorGrossPayable(v);
+    const net = vendorPayable(v);
+
+    let html = `
+      <div class="stat"><span>Total Purchased</span><span class="v">${fmt(purchases.reduce((s,e)=>s+e.amount,0))}</span></div>
+      <div class="stat payable"><span><b>Payable to Vendor</b></span><span class="v">${fmt(net)}</span></div>
+      <b style="font-size:13px;display:block;margin-top:14px;">Bills</b>`;
+
+    html += purchases.length ? purchases.map(e=>{
+      const status = purchaseStatus(e);
+      const bal = purchaseBalance(e);
+      const badgeClass = status==='paid'?'badge-paid':(status==='partial'?'badge-partial':'badge-pending');
+      const badgeText = status==='paid'?'PAID':(status==='partial'?'PARTIAL ('+fmt(bal)+' due)':'PENDING');
+      return `<div class="entry">
+        <div><div>${e.itemType||''} · ${fmt(e.qty||0)} @ ${fmt(e.rate||0)} <span class="badge ${badgeClass}">${badgeText}</span></div>
+        <div class="meta">${e.date}${e.note?' · '+e.note:''}</div></div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span style="font-weight:700;">${fmt(e.amount)}</span>
+          ${status!=='paid' ? `<button class="mini-btn" style="background:var(--amber);" onclick="openPayModal(${e.id})">Pay</button>` : ''}
+        </div>
+      </div>`;
+    }).join('') : '<div class="empty">No purchase bills yet</div>';
+
+    box.innerHTML = html;
+    return;
+  }
+
+  searchBox.style.display = 'block';
+  title.textContent = 'Vendor Ledger';
+  const q = searchBox.value.trim().toLowerCase();
+  let names = allVendorsWithActivity();
+  if(q) names = names.filter(n=>n.toLowerCase().includes(q));
+  names.sort();
+  if(names.length===0){ box.innerHTML = `<div class="empty">${q?'No matching vendors':'No vendor activity yet'}</div>`; return; }
+  box.innerHTML = names.map(name=>{
+    const net = vendorPayable(name);
+    return `<div class="entry" style="cursor:pointer;" onclick="openVendorView('${name.replace(/'/g,"\\'")}')">
+      <div><b>${name}</b></div>
+      <div style="${net>0.005?'color:var(--red);font-weight:700;':'color:var(--green);'}">${net>0.005 ? 'Payable '+fmt(net) : 'Settled'}</div>
+    </div>`;
+  }).join('');
+}
+function openVendorView(name){ openVendor = name; renderVendorLedger(); }
+function backToVendors(){ openVendor = null; renderVendorLedger(); }
+
+/* ============================= PENDING ============================= */
+function renderPending(){
+  const box = document.getElementById('pendingList');
+  const pbox = document.getElementById('payableList');
+  document.getElementById('pendingGrandTotal').textContent = fmt(totalPendingAllClients());
+  document.getElementById('payableGrandTotal').textContent = fmt(totalPayableAllVendors());
+
+  const clients = allClientsWithActivity()
+    .map(n=>({ name:n, net: clientNetPending(n) }))
+    .filter(c=>c.net > 0.005)
+    .sort((a,b)=>b.net-a.net);
+  box.innerHTML = clients.length ? clients.map(c=>`<div class="entry" style="cursor:pointer;" onclick="goToClientLedger('${c.name.replace(/'/g,"\\'")}')">
+    <div><b>${c.name}</b></div>
+    <div style="color:var(--amber);font-weight:700;">${fmt(c.net)}</div>
+  </div>`).join('') : '<div class="empty">No pending amounts 🎉</div>';
+
+  const vendors = allVendorsWithActivity()
+    .map(n=>({ name:n, net: vendorPayable(n) }))
+    .filter(c=>c.net > 0.005)
+    .sort((a,b)=>b.net-a.net);
+  pbox.innerHTML = vendors.length ? vendors.map(c=>`<div class="entry" style="cursor:pointer;" onclick="goToVendorLedger('${c.name.replace(/'/g,"\\'")}')">
+    <div><b>${c.name}</b></div>
+    <div style="color:var(--red);font-weight:700;">${fmt(c.net)}</div>
+  </div>`).join('') : '<div class="empty">No payables 🎉</div>';
+}
+function goToClientLedger(name){ switchTab('ledger'); openClientView(name); }
+function goToVendorLedger(name){ switchTab('vendor'); openVendorView(name); }
+
+/* ============================= BANK ============================= */
+let bankTxnType = 'deposit';
+function setBankTxnType(t){
+  bankTxnType = t;
+  document.getElementById('btDeposit').classList.toggle('active', t==='deposit');
+  document.getElementById('btWithdrawal').classList.toggle('active', t==='withdrawal');
+  document.getElementById('btCashToBank').classList.toggle('active', t==='cash_to_bank');
+  document.getElementById('btBankToCash').classList.toggle('active', t==='bank_to_cash');
+  const catField = document.getElementById('btCategory').closest('.field');
+  catField.style.display = (t==='cash_to_bank'||t==='bank_to_cash') ? 'none' : 'block';
+}
+function allBankTxnCategories(){
+  const fromData = bankTransactions.map(b=>b.category).filter(Boolean);
+  return [...new Set([...bankTxnTypesCache, ...fromData])];
+}
+function onBankTxnCategoryInput(){
+  const box = document.getElementById('btCategorySuggestions');
+  const val = document.getElementById('btCategory').value.trim().toLowerCase();
+  const all = allBankTxnCategories();
+  const matches = val ? all.filter(n=>n.toLowerCase().startsWith(val)) : all;
+  if(matches.length===0){ box.style.display='none'; box.innerHTML=''; return; }
+  box.innerHTML = matches.map(n => `<div class="suggest-item" onmousedown="pickBankTxnCategory('${n.replace(/'/g,"\\'")}')">${n}</div>`).join('');
+  box.style.display = 'block';
+}
+function pickBankTxnCategory(name){ document.getElementById('btCategory').value = name; hideBankTxnSuggestions(); }
+function hideBankTxnSuggestions(){ document.getElementById('btCategorySuggestions').style.display='none'; }
+
+async function submitBankTxn(){
+  const amount = parseFloat(document.getElementById('btAmount').value);
+  const txnDate = document.getElementById('btDate').value || todayStr();
+  const category = document.getElementById('btCategory').value.trim();
+  const acctId = document.getElementById('btBankAccountSelect').value;
+  if(!amount || amount<=0){ alert('Enter a valid amount'); return; }
+  if(!acctId){ alert('Choose a bank account'); return; }
+  if((bankTxnType==='deposit'||bankTxnType==='withdrawal') && !category){ alert('Enter a category'); return; }
+  try{
+    const res = await fetch('/api/bank-transactions', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ date: txnDate, type: bankTxnType, amount, category, note: document.getElementById('btNote').value.trim(), bankAccountId: acctId })
+    });
+    if(!res.ok){ const err = await res.json().catch(()=>({})); alert(err.error ? ('Could not save: '+err.error) : 'Could not save transaction.'); return; }
+  }catch(err){ alert('Could not reach the server: ' + (err&&err.message?err.message:err)); return; }
+  document.getElementById('btAmount').value = '';
+  document.getElementById('btCategory').value = '';
+  document.getElementById('btNote').value = '';
+  await load(); await loadTypeOptions();
+}
+
+async function saveOpeningBank(){
+  if(!isAdmin()){ alert('Only an admin can set the opening balance.'); return; }
+  if(bankAccountFilter === 'all'){
+    alert('Pick a specific account above (not "All accounts") to set its opening balance.');
+    return;
+  }
+  const amount = parseFloat(document.getElementById('obAmount').value);
+  const obDate = document.getElementById('obDate').value;
+  if(isNaN(amount)){ alert('Enter a valid amount'); return; }
+  if(!obDate){ alert('Choose a date'); return; }
+  try{
+    const res = await fetch('/api/bank-accounts/' + bankAccountFilter, {
+      method:'PATCH', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ openingBalance: amount, openingDate: obDate })
+    });
+    if(!res.ok){ const err = await res.json().catch(()=>({})); alert(err.error ? ('Could not save: '+err.error) : 'Could not save.'); return; }
+  }catch(err){ alert('Could not reach the server: ' + (err&&err.message?err.message:err)); return; }
+  await load();
+}
+
+async function deleteBankTxn(id){
+  if(!isAdmin()){ alert('Only an admin can delete bank transactions.'); return; }
+  if(!confirm('Delete this bank transaction? This cannot be undone.')) return;
+  try{ await fetch('/api/bank-transactions/' + id, { method:'DELETE' }); }catch(e){}
+  await load();
+}
+
+function renderBank(){
+  renderAccountsList();
+
+  const labelEl = document.getElementById('bankBalanceLabel');
+  if(bankAccountFilter === 'all') labelEl.textContent = 'Current Bank Balance (all accounts)';
+  else labelEl.textContent = 'Current Bank Balance — ' + accountName(bankAccountFilter);
+
+  document.getElementById('bankCurrentBalance').textContent = fmt(currentBankBalance(bankAccountFilter));
+
+  const obDateEl = document.getElementById('obDate');
+  const obAmtEl = document.getElementById('obAmount');
+  if(bankAccountFilter === 'all'){
+    obDateEl.value = '';
+    obAmtEl.value = '';
+  } else {
+    const a = bankAccounts.find(x=>x.id===bankAccountFilter);
+    obDateEl.value = (a && a.opening_date) || todayStr();
+    obAmtEl.value = (a && a.opening_balance) || 0;
+  }
+  if(!document.getElementById('btDate').value) document.getElementById('btDate').value = todayStr();
+
+  const showBalance = (bankAccountFilter !== 'all');
+  const thead = document.getElementById('bankLedgerHead');
+  thead.innerHTML = `<tr>
+    <th>Date</th><th>Description</th>
+    <th style="text-align:right;">Credit</th><th style="text-align:right;">Debit</th>
+    ${showBalance ? '<th style="text-align:right;">Balance</th>' : ''}
+    <th></th></tr>`;
+
+  const ledger = buildBankLedger(bankAccountFilter);
+  const body = document.getElementById('bankLedgerBody');
+  body.innerHTML = ledger.length ? ledger.map(r=>{
+    const delBtn = (r.deletable && isAdmin()) ? `<button class="del" onclick="deleteBankTxn(${r.id})">✕</button>` : '';
+    const balCell = showBalance ? `<td style="text-align:right;font-weight:700;">${fmt(r.balance)}</td>` : '';
+    return `<tr><td>${r.date}</td><td>${r.label}</td><td style="text-align:right;color:var(--green);">${r.credit>0?fmt(r.credit):'-'}</td><td style="text-align:right;color:var(--red);">${r.debit>0?fmt(r.debit):'-'}</td>${balCell}<td>${delBtn}</td></tr>`;
+  }).join('') : `<tr><td colspan="${showBalance?6:5}" class="empty">No bank activity yet</td></tr>`;
+}
+
+/* ============================= BACKUP / RESTORE ============================= */
+function openDataModal(){ document.getElementById('clearConfirmText').value=''; document.getElementById('dataModal').style.display='flex'; }
+function closeDataModal(){ document.getElementById('dataModal').style.display='none'; }
+
+async function backupData(){
+  try{
+    const res = await fetch('/api/export');
+    if(!res.ok){ alert('Only an admin can back up data.'); return; }
+    const data = await res.json();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    await saveOrDownload(blob, 'tracker-backup-' + todayStr() + '.json');
+  }catch(err){ alert('Backup failed: ' + (err&&err.message?err.message:err)); }
+}
+
+function restoreData(event){
+  if(!isAdmin()){ alert('Only an admin can restore a backup.'); event.target.value=''; return; }
+  const file = event.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = async () => {
+    try{
+      let parsed;
+      try{ parsed = JSON.parse(reader.result); }
+      catch(err){ alert('That file is not valid backup JSON.'); event.target.value=''; return; }
+      if(!confirm('This will replace ALL current data on the server with the contents of this backup file. Continue?')){
+        event.target.value=''; return;
+      }
+      const res = await fetch('/api/import', {
+        method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(parsed)
+      });
+      if(!res.ok){ const err = await res.json().catch(()=>({})); alert('Restore failed: ' + (err.error||'server error')); event.target.value=''; return; }
+      const result = await res.json();
+      await load(); await loadTypeOptions();
+      alert('Restore complete: ' + JSON.stringify(result.counts));
+      event.target.value = '';
+      closeDataModal();
+    }catch(err){
+      alert('Restore failed: ' + (err&&err.message?err.message:err));
+      event.target.value = '';
+    }
+  };
+  reader.onerror = () => { alert('Could not read that file.'); event.target.value=''; };
+  reader.readAsText(file);
+}
+
+async function clearAllData(){
+  const text = document.getElementById('clearConfirmText').value;
+  if(text !== 'DELETE'){ alert('Type DELETE exactly (in capitals) to confirm.'); return; }
+  if(!confirm('This will permanently erase ALL entries, payments, advances, and adjustments. Bank accounts are kept. This cannot be undone. Are you absolutely sure?')) return;
+  try{
+    const res = await fetch('/api/clear-all', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({confirm:'DELETE'}) });
+    if(!res.ok){ const err = await res.json().catch(()=>({})); alert('Could not clear data: ' + (err.error||'server error')); return; }
+  }catch(err){ alert('Could not reach the server: ' + (err&&err.message?err.message:err)); return; }
+  await load();
+  closeDataModal();
+  alert('All data cleared. You can now restore from a backup if needed.');
+}
+
+/* ============================= REPORTS ============================= */
+function openReportModal(){ refreshAllAccountSelects(); document.getElementById('reportModal').style.display='flex'; }
+function closeReportModal(){ document.getElementById('reportModal').style.display='none'; }
+
+function buildReportDataset(fromStr, toStr, accountFilter){
+  accountFilter = accountFilter || 'all';
+  const t = computeRangeTotals(fromStr, toStr, accountFilter);
+  const advInRange = advances.filter(a=>a.date>=fromStr && a.date<=toStr && (accountFilter==='all' || a.method!=='bank' || a.bankAccountId===accountFilter));
+  const adjInRange = adjustments.filter(a=>a.date>=fromStr && a.date<=toStr);
+  const openingCash = computeOpeningCash(fromStr);
+  const closingCash = Math.round((openingCash + t.cashSale + t.advCash + t.bankToCash - t.cashPurch - t.cashExp - t.cashToBank)*100)/100;
+  const openingBank = computeOpeningBank(fromStr, accountFilter);
+  const closingBank = Math.round((openingBank + t.bankSale + t.advBank + t.bankDeposits + t.cashToBank - t.bankPurch - t.bankExp - t.bankWithdrawals - t.bankToCash)*100)/100;
+  const fullLedger = buildBankLedger(accountFilter);
+  const bankLedgerInRange = fullLedger.filter(r=>r.date>=fromStr && r.date<=toStr);
+  return { ...t, advInRange, adjInRange, opening: openingCash, closingCash, openingBank, closingBank, bankLedgerInRange };
+}
+
+async function downloadReport(){
+  const { fromStr, toStr } = readRange();
+  const accountFilter = document.getElementById('reportBankAccount').value || 'all';
+  const d = buildReportDataset(fromStr, toStr, accountFilter);
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const pw = doc.internal.pageSize.getWidth();
+  const ph = doc.internal.pageSize.getHeight();
+  const margin = 14;
+  const contentW = pw - margin * 2;
+
+  const fmtDate = s => new Date(s+'T00:00:00').toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'});
+
+  doc.setFillColor(37,99,235);
+  doc.rect(0,0,pw,34,'F');
+  doc.setTextColor(255,255,255);
+  doc.setFontSize(16); doc.setFont(undefined,'bold');
+  doc.text('SHREE BALAJI ASSOCIATES', margin, 13);
+  doc.setFontSize(8); doc.setFont(undefined,'normal');
+  doc.text('Near Om Sai Biofuels Bargawan Odgadi Distt. Singrauli', margin, 19);
+  doc.text('GSTIN/UIN: 23AEPFS7841N1Z9', margin, 24);
+  doc.setFontSize(11); doc.setFont(undefined,'bold');
+  doc.text('Report of Sales, Purchases and Expenses', margin, 30);
+
+  doc.setTextColor(60,60,60);
+  doc.setFontSize(9); doc.setFont(undefined,'normal');
+  const periodText = (fromStr===toStr) ? fmtDate(fromStr) : (fmtDate(fromStr)+'  to  '+fmtDate(toStr));
+  doc.text(periodText, margin, 42);
+  const acctText = accountFilter === 'all'
+    ? 'Bank account: All accounts (combined)'
+    : 'Bank account: ' + accountName(accountFilter);
+  doc.text(acctText, pw - margin - doc.getTextWidth(acctText), 42);
+
+  let y = 50;
+  const totalSalesIn = d.cashSale + d.bankSale;
+  const totalPurch = d.cashPurch + d.bankPurch;
+  const totalExpenses = d.cashExp + d.bankExp;
+  const netCashFlow = (d.cashSale + d.bankSale + d.advCash + d.advBank + d.bankDeposits + d.cashToBank)
+                    - (d.cashPurch + d.bankPurch + d.cashExp + d.bankExp + d.bankWithdrawals + d.bankToCash);
+
+  doc.setDrawColor(220,224,230);
+  doc.setFillColor(248,250,252);
+  doc.roundedRect(margin, y, contentW, 30, 2, 2, 'FD');
+
+  const cardW = contentW / 4;
+  const cards = [
+    { label: 'Total Sales', value: fmt(totalSalesIn), color: [22,163,74] },
+    { label: 'Total Purchases', value: fmt(totalPurch), color: [220,38,38] },
+    { label: 'Net Cash Flow', value: fmt(netCashFlow), color: netCashFlow >= 0 ? [22,163,74] : [220,38,38] },
+    { label: 'Payable (Vendors)', value: fmt(totalPayableAllVendors()), color: [220,38,38] }
+  ];
+  cards.forEach((c,i)=>{
+    const cx = margin + i * cardW + cardW/2;
+    doc.setFontSize(7); doc.setTextColor(120,120,120); doc.setFont(undefined,'normal');
+    doc.text(c.label.toUpperCase(), cx, y+9, {align:'center'});
+    doc.setFontSize(13); doc.setTextColor(c.color[0], c.color[1], c.color[2]); doc.setFont(undefined,'bold');
+    doc.text(c.value, cx, y+22, {align:'center'});
+    if(i>0){
+      doc.setDrawColor(220,224,230);
+      doc.line(margin + i*cardW, y+4, margin + i*cardW, y+26);
+    }
+  });
+  y += 40;
+
+  function sectionHeading(title){
+    if(y > ph - 50){ doc.addPage(); y = 20; }
+    doc.setFillColor(37,99,235);
+    doc.rect(margin, y, 3, 8, 'F');
+    doc.setFontSize(12); doc.setFont(undefined,'bold'); doc.setTextColor(30,30,30);
+    doc.text(title, margin + 7, y + 6);
+    y += 14;
+  }
+  function smallNote(text){
+    doc.setFontSize(8); doc.setFont(undefined,'italic'); doc.setTextColor(140,140,140);
+    doc.text(text, margin, y);
+    doc.setFont(undefined,'normal');
+    y += 12;
+  }
+
+  sectionHeading('Sales Summary');
+  doc.autoTable({
+    startY:y, margin:{left:margin, right:margin}, theme:'plain',
+    styles:{fontSize:9, cellPadding:{top:2,bottom:2,left:0,right:0}, textColor:[40,40,40]},
+    body:[
+      ['Cash Sales Received', fmt(d.cashSale)],
+      ['Bank Sales Received', fmt(d.bankSale)],
+      [{content:'Total Sales Received', styles:{fontStyle:'bold'}}, {content:fmt(totalSalesIn), styles:{fontStyle:'bold'}}],
+      ['Advance Received (Cash)', fmt(d.advCash)],
+      ['Advance Received (Bank)', fmt(d.advBank)],
+    ],
+    columnStyles:{0:{cellWidth:contentW-40}, 1:{halign:'right', cellWidth:40}}
+  });
+  y = doc.lastAutoTable.finalY + 10;
+
+  sectionHeading('Purchase Summary');
+  doc.autoTable({
+    startY:y, margin:{left:margin, right:margin}, theme:'plain',
+    styles:{fontSize:9, cellPadding:{top:2,bottom:2,left:0,right:0}, textColor:[40,40,40]},
+    body:[
+      ['Cash Purchases Paid', fmt(d.cashPurch)],
+      ['Bank Purchases Paid', fmt(d.bankPurch)],
+      [{content:'Total Purchases Paid', styles:{fontStyle:'bold'}}, {content:fmt(totalPurch), styles:{fontStyle:'bold'}}],
+      ['Total Payable to Vendors (live)', fmt(totalPayableAllVendors())],
+    ],
+    columnStyles:{0:{cellWidth:contentW-40}, 1:{halign:'right', cellWidth:40}}
+  });
+  y = doc.lastAutoTable.finalY + 10;
+
+  sectionHeading('Expense Summary');
+  doc.autoTable({
+    startY:y, margin:{left:margin, right:margin}, theme:'plain',
+    styles:{fontSize:9, cellPadding:{top:2,bottom:2,left:0,right:0}, textColor:[40,40,40]},
+    body:[
+      ['Cash Expenses', fmt(d.cashExp)],
+      ['Bank Expenses', fmt(d.bankExp)],
+      [{content:'Total Expenses', styles:{fontStyle:'bold'}}, {content:fmt(totalExpenses), styles:{fontStyle:'bold'}}],
+    ],
+    columnStyles:{0:{cellWidth:contentW-40}, 1:{halign:'right', cellWidth:40}}
+  });
+  y = doc.lastAutoTable.finalY + 10;
+
+  sectionHeading('Cash & Bank Balances');
+  doc.autoTable({
+    startY:y, margin:{left:margin, right:margin}, theme:'plain',
+    styles:{fontSize:9, cellPadding:{top:2,bottom:2,left:0,right:0}, textColor:[40,40,40]},
+    body:[
+      ['Opening Cash', fmt(d.opening)],
+      ['Closing Cash', fmt(d.closingCash)],
+      ['Opening Bank', fmt(d.openingBank)],
+      ['Closing Bank', fmt(d.closingBank)],
+    ],
+    columnStyles:{0:{cellWidth:contentW-40}, 1:{halign:'right', cellWidth:40}}
+  });
+  y = doc.lastAutoTable.finalY + 14;
+
+  sectionHeading('Sales — bills raised in period');
+  if(d.salesInRange.length){
+    doc.autoTable({
+      startY:y, margin:{left:margin, right:margin}, theme:'striped',
+      styles:{fontSize:8, cellPadding:3},
+      headStyles:{fillColor:[55,65,81], textColor:255},
+      alternateRowStyles:{fillColor:[248,250,252]},
+      head:[['Date','Client','Item','Qty','Rate','Status','Amount']],
+      body:d.salesInRange.map(e=>{
+        const s = saleStatus(e);
+        return [e.date, e.client||'-', e.itemType||'-', e.qty?fmt(e.qty):'-', e.rate?fmt(e.rate):'-', s.toUpperCase(), fmt(e.amount)];
+      }),
+      columnStyles:{6:{halign:'right'}}
+    });
+    y = doc.lastAutoTable.finalY + 14;
+  } else { smallNote('No sales in this period.'); }
+
+  sectionHeading('Purchases — bills received in period');
+  if(d.purchasesInRange.length){
+    doc.autoTable({
+      startY:y, margin:{left:margin, right:margin}, theme:'striped',
+      styles:{fontSize:8, cellPadding:3},
+      headStyles:{fillColor:[55,65,81], textColor:255},
+      alternateRowStyles:{fillColor:[248,250,252]},
+      head:[['Date','Vendor','Item','Qty','Rate','Status','Amount']],
+      body:d.purchasesInRange.map(e=>{
+        const s = purchaseStatus(e);
+        return [e.date, e.vendor||'-', e.itemType||'-', e.qty?fmt(e.qty):'-', e.rate?fmt(e.rate):'-', s.toUpperCase(), fmt(e.amount)];
+      }),
+      columnStyles:{6:{halign:'right'}}
+    });
+    y = doc.lastAutoTable.finalY + 14;
+  } else { smallNote('No purchases in this period.'); }
+
+  sectionHeading('Payments Received (from clients)');
+  const saleIds = new Set(entries.filter(e=>e.kind==='sale').map(e=>e.id));
+  const paymentsInRange = d.salePayments.filter(p => saleIds.has(p.entryId) && (accountFilter==='all' || p.method!=='bank' || p.bankAccountId===accountFilter));
+  if(paymentsInRange.length){
+    doc.autoTable({
+      startY:y, margin:{left:margin, right:margin}, theme:'striped',
+      styles:{fontSize:8, cellPadding:3},
+      headStyles:{fillColor:[55,65,81], textColor:255},
+      alternateRowStyles:{fillColor:[248,250,252]},
+      head:[['Date','Client','Method','Bank account','Amount','Loading/Unloading']],
+      body:paymentsInRange.map(p=>{
+        const e = entries.find(x=>x.id===p.entryId);
+        return [p.date, e?e.client:'-', p.method,
+                (p.method==='bank'? accountName(p.bankAccountId) : '-'),
+                fmt(p.amount),
+                p.loadingUnloading>0 ? ('Yes — '+fmt(p.loadingUnloading)) : '-'];
+      }),
+      columnStyles:{4:{halign:'right'}}
+    });
+    y = doc.lastAutoTable.finalY + 14;
+  } else { smallNote('No client payments in this period.'); }
+
+  sectionHeading('Payments Made (to vendors)');
+  const purchIds = new Set(entries.filter(e=>e.kind==='purchase').map(e=>e.id));
+  const purchPaysInRange = d.purchPayments.filter(p => purchIds.has(p.entryId) && (accountFilter==='all' || p.method!=='bank' || p.bankAccountId===accountFilter));
+  if(purchPaysInRange.length){
+    doc.autoTable({
+      startY:y, margin:{left:margin, right:margin}, theme:'striped',
+      styles:{fontSize:8, cellPadding:3},
+      headStyles:{fillColor:[55,65,81], textColor:255},
+      alternateRowStyles:{fillColor:[248,250,252]},
+      head:[['Date','Vendor','Method','Bank account','Amount']],
+      body:purchPaysInRange.map(p=>{
+        const e = entries.find(x=>x.id===p.entryId);
+        return [p.date, e?e.vendor:'-', p.method,
+                (p.method==='bank'? accountName(p.bankAccountId) : '-'),
+                fmt(p.amount)];
+      }),
+      columnStyles:{4:{halign:'right'}}
+    });
+    y = doc.lastAutoTable.finalY + 14;
+  } else { smallNote('No vendor payments in this period.'); }
+
+  sectionHeading('Expenses');
+  const expensesInRange = d.expInRange.filter(e => accountFilter==='all' || e.method!=='bank' || e.bankAccountId===accountFilter);
+  if(expensesInRange.length){
+    doc.autoTable({
+      startY:y, margin:{left:margin, right:margin}, theme:'striped',
+      styles:{fontSize:8, cellPadding:3},
+      headStyles:{fillColor:[55,65,81], textColor:255},
+      alternateRowStyles:{fillColor:[248,250,252]},
+      head:[['Date','Type','Method','Bank account','Note','Amount']],
+      body:expensesInRange.map(e=>[e.date, e.expenseType||'-', e.method==='cash'?'Cash':'Bank',
+                 (e.method==='bank'? accountName(e.bankAccountId) : '-'),
+                 (e.note||'-')+(e.linkedSaleId?' (from sale #'+e.linkedSaleId+')':''),
+                 fmt(e.amount)]),
+      columnStyles:{5:{halign:'right'}}
+    });
+    y = doc.lastAutoTable.finalY + 14;
+  } else { smallNote('No expenses in this period.'); }
+
+  if(d.advInRange.length){
+    sectionHeading('Advances Received');
+    doc.autoTable({
+      startY:y, margin:{left:margin, right:margin}, theme:'striped',
+      styles:{fontSize:8, cellPadding:3},
+      headStyles:{fillColor:[55,65,81], textColor:255},
+      alternateRowStyles:{fillColor:[248,250,252]},
+      head:[['Date','Client','Method','Bank account','Note','Amount']],
+      body:d.advInRange.map(a=>[a.date, a.client, a.method,
+        a.method==='bank'?accountName(a.bankAccountId):'-',
+        a.note||'-', fmt(a.amount)]),
+      columnStyles:{5:{halign:'right'}}
+    });
+    y = doc.lastAutoTable.finalY + 14;
+  }
+
+  if(d.adjInRange.length){
+    sectionHeading('Client Adjustments');
+    doc.autoTable({
+      startY:y, margin:{left:margin, right:margin}, theme:'striped',
+      styles:{fontSize:8, cellPadding:3},
+      headStyles:{fillColor:[55,65,81], textColor:255},
+      alternateRowStyles:{fillColor:[248,250,252]},
+      head:[['Date','Client','Type','Note','Amount']],
+      body:d.adjInRange.map(a=>[a.date, a.client, a.adjType, a.note||'-', fmt(a.amount)]),
+      columnStyles:{4:{halign:'right'}}
+    });
+    y = doc.lastAutoTable.finalY + 14;
+  }
+
+  if(d.bankLedgerInRange.length){
+    sectionHeading('Bank Book');
+    const showBal = (accountFilter !== 'all');
+    doc.autoTable({
+      startY:y, margin:{left:margin, right:margin}, theme:'striped',
+      styles:{fontSize:8, cellPadding:3},
+      headStyles:{fillColor:[55,65,81], textColor:255},
+      alternateRowStyles:{fillColor:[248,250,252]},
+      head:[['Date','Description','Credit','Debit', ...(showBal?['Balance']:[])]],
+      body:d.bankLedgerInRange.map(r=>{
+        const base = [r.date, r.label, r.credit>0?fmt(r.credit):'-', r.debit>0?fmt(r.debit):'-'];
+        if(showBal) base.push(fmt(r.balance));
+        return base;
+      }),
+      columnStyles: showBal ? {2:{halign:'right'},3:{halign:'right'},4:{halign:'right', fontStyle:'bold'}} : {2:{halign:'right'},3:{halign:'right'}}
+    });
+  }
+
+  const pageCount = doc.internal.getNumberOfPages();
+  for(let i=1;i<=pageCount;i++){
+    doc.setPage(i);
+    doc.setDrawColor(230,232,236);
+    doc.line(margin, ph-12, pw-margin, ph-12);
+    doc.setFontSize(7); doc.setTextColor(150,150,150); doc.setFont(undefined,'normal');
+    doc.text('Generated ' + new Date().toLocaleString(), margin, ph-7);
+    doc.text('Page ' + i + ' of ' + pageCount, pw - margin, ph-7, {align:'right'});
+  }
+
+  const blob = doc.output('blob');
+  await saveOrDownload(blob, 'Business-Report-' + fromStr + (toStr!==fromStr?'_to_'+toStr:'') + '.pdf');
+}
+
+async function downloadExcel(){
+  const { fromStr, toStr } = readRange();
+  const accountFilter = document.getElementById('reportBankAccount').value || 'all';
+  const d = buildReportDataset(fromStr, toStr, accountFilter);
+
+  const acctLabel = accountFilter==='all' ? 'All accounts (combined)' : accountName(accountFilter);
+  const totalSalesIn = d.cashSale + d.bankSale;
+  const totalPurch = d.cashPurch + d.bankPurch;
+  const totalExpenses = d.cashExp + d.bankExp;
+  const netCashFlow = (d.cashSale + d.bankSale + d.advCash + d.advBank + d.bankDeposits + d.cashToBank)
+                    - (d.cashPurch + d.bankPurch + d.cashExp + d.bankExp + d.bankWithdrawals + d.bankToCash);
+
+  const summaryRows = [
+    ['SHREE BALAJI ASSOCIATES'],
+    ['Near Om Sai Biofuels Bargawan Odgadi Distt. Singrauli'],
+    ['GSTIN/UIN: 23AEPFS7841N1Z9'],
+    [],
+    ['Report of Sales, Purchases and Expenses'],
+    [fromStr===toStr ? fromStr : fromStr+' to '+toStr],
+    ['Bank account', acctLabel],
+    [],
+    ['AT A GLANCE'],
+    ['Total Sales', totalSalesIn],
+    ['Total Purchases', totalPurch],
+    ['Total Expenses', totalExpenses],
+    ['Net Cash Flow', netCashFlow],
+    ['Receivable (Clients)', totalPendingAllClients()],
+    ['Payable (Vendors)', totalPayableAllVendors()],
+    [],
+    ['SALES SUMMARY'],
+    ['Cash Sales Received', d.cashSale],
+    ['Bank Sales Received', d.bankSale],
+    ['Total Sales Received', totalSalesIn],
+    ['Advance Received (Cash)', d.advCash],
+    ['Advance Received (Bank)', d.advBank],
+    [],
+    ['PURCHASE SUMMARY'],
+    ['Cash Purchases Paid', d.cashPurch],
+    ['Bank Purchases Paid', d.bankPurch],
+    ['Total Purchases Paid', totalPurch],
+    [],
+    ['EXPENSE SUMMARY'],
+    ['Cash Expenses', d.cashExp],
+    ['Bank Expenses', d.bankExp],
+    ['Total Expenses', totalExpenses],
+    [],
+    ['CASH & BANK BALANCES'],
+    ['Opening Cash', d.opening],
+    ['Closing Cash', d.closingCash],
+    ['Opening Bank', d.openingBank],
+    ['Closing Bank', d.closingBank],
+  ];
+
+  if(accountFilter === 'all' && bankAccounts.length){
+    summaryRows.push([]);
+    summaryRows.push(['BANK ACCOUNTS SUMMARY']);
+    summaryRows.push(['Account','Opening','In','Out','Closing (live)']);
+    bankAccounts.forEach(a=>{
+      const opening = a.opening_balance || 0;
+      const saleIds = new Set(entries.filter(e=>e.kind==='sale').map(e=>e.id));
+      const purchIds = new Set(entries.filter(e=>e.kind==='purchase').map(e=>e.id));
+      const inAmt =
+        payments.filter(p=>p.method==='bank' && p.bankAccountId===a.id && p.date>=fromStr && p.date<=toStr && saleIds.has(p.entryId)).reduce((s,p)=>s+p.amount,0) +
+        advances.filter(x=>x.method==='bank' && x.bankAccountId===a.id && x.date>=fromStr && x.date<=toStr).reduce((s,x)=>s+x.amount,0) +
+        bankTransactions.filter(b=>(b.type==='deposit'||b.type==='cash_to_bank') && b.bankAccountId===a.id && b.date>=fromStr && b.date<=toStr).reduce((s,b)=>s+b.amount,0);
+      const outAmt =
+        payments.filter(p=>p.method==='bank' && p.bankAccountId===a.id && p.date>=fromStr && p.date<=toStr && purchIds.has(p.entryId)).reduce((s,p)=>s+p.amount,0) +
+        entries.filter(e=>e.kind==='expense' && e.method==='bank' && e.bankAccountId===a.id && e.date>=fromStr && e.date<=toStr).reduce((s,e)=>s+e.amount,0) +
+        bankTransactions.filter(b=>(b.type==='withdrawal'||b.type==='bank_to_cash') && b.bankAccountId===a.id && b.date>=fromStr && b.date<=toStr).reduce((s,b)=>s+b.amount,0);
+      summaryRows.push([a.name, opening, inAmt, outAmt, currentBankBalance(a.id)]);
+    });
+  }
+
+  const summarySheet = XLSX.utils.aoa_to_sheet(summaryRows);
+  summarySheet['!cols'] = [{wch:36},{wch:16},{wch:16},{wch:16},{wch:16}];
+
+  const salesSheet = XLSX.utils.aoa_to_sheet([
+    ['Sales — bills raised in period'],
+    [],
+    ['Date','Client','Item','Qty','Rate','Status','Amount'],
+    ...d.salesInRange.map(e=>[e.date, e.client||'', e.itemType||'', e.qty||'', e.rate||'', saleStatus(e), e.amount])
+  ]);
+  salesSheet['!cols'] = [{wch:12},{wch:20},{wch:18},{wch:10},{wch:10},{wch:10},{wch:14}];
+
+  const purchSheet = XLSX.utils.aoa_to_sheet([
+    ['Purchases — bills received in period'],
+    [],
+    ['Date','Vendor','Item','Qty','Rate','Status','Amount'],
+    ...d.purchasesInRange.map(e=>[e.date, e.vendor||'', e.itemType||'', e.qty||'', e.rate||'', purchaseStatus(e), e.amount])
+  ]);
+  purchSheet['!cols'] = [{wch:12},{wch:20},{wch:18},{wch:10},{wch:10},{wch:10},{wch:14}];
+
+  const saleIds = new Set(entries.filter(e=>e.kind==='sale').map(e=>e.id));
+  const paymentsInRange = d.salePayments.filter(p => saleIds.has(p.entryId) && (accountFilter==='all' || p.method!=='bank' || p.bankAccountId===accountFilter));
+  const paymentsSheet = XLSX.utils.aoa_to_sheet([
+    ['Client Payments Received'],
+    [],
+    ['Date','Client','Method','Bank account','Amount','Loading/Unloading'],
+    ...paymentsInRange.map(p=>{
+      const e = entries.find(x=>x.id===p.entryId);
+      return [p.date, e?e.client:'', p.method,
+              p.method==='bank'?accountName(p.bankAccountId):'',
+              p.amount, p.loadingUnloading||0];
+    })
+  ]);
+  paymentsSheet['!cols'] = [{wch:12},{wch:20},{wch:12},{wch:18},{wch:14},{wch:16}];
+
+  const purchIds = new Set(entries.filter(e=>e.kind==='purchase').map(e=>e.id));
+  const purchPaysInRange = d.purchPayments.filter(p => purchIds.has(p.entryId) && (accountFilter==='all' || p.method!=='bank' || p.bankAccountId===accountFilter));
+  const purchPaysSheet = XLSX.utils.aoa_to_sheet([
+    ['Vendor Payments Made'],
+    [],
+    ['Date','Vendor','Method','Bank account','Amount'],
+    ...purchPaysInRange.map(p=>{
+      const e = entries.find(x=>x.id===p.entryId);
+      return [p.date, e?e.vendor:'', p.method,
+              p.method==='bank'?accountName(p.bankAccountId):'',
+              p.amount];
+    })
+  ]);
+  purchPaysSheet['!cols'] = [{wch:12},{wch:20},{wch:12},{wch:18},{wch:14}];
+
+  const expensesInRange = d.expInRange.filter(e => accountFilter==='all' || e.method!=='bank' || e.bankAccountId===accountFilter);
+  const expSheet = XLSX.utils.aoa_to_sheet([
+    ['Expenses'],
+    [],
+    ['Date','Type','Method','Bank account','Note','Amount','Linked Sale ID'],
+    ...expensesInRange.map(e=>[e.date, e.expenseType||'', e.method,
+               e.method==='bank'?accountName(e.bankAccountId):'',
+               e.note||'', e.amount, e.linkedSaleId||''])
+  ]);
+  expSheet['!cols'] = [{wch:12},{wch:20},{wch:10},{wch:18},{wch:24},{wch:14},{wch:14}];
+
+  const advSheet = XLSX.utils.aoa_to_sheet([
+    ['Advances Received'],
+    [],
+    ['Date','Client','Method','Bank account','Note','Amount'],
+    ...d.advInRange.map(a=>[a.date, a.client, a.method,
+      a.method==='bank'?accountName(a.bankAccountId):'',
+      a.note||'', a.amount])
+  ]);
+  advSheet['!cols'] = [{wch:12},{wch:20},{wch:10},{wch:18},{wch:24},{wch:14}];
+
+  const adjSheet = XLSX.utils.aoa_to_sheet([
+    ['Client Adjustments'],
+    [],
+    ['Date','Client','Type','Note','Amount'],
+    ...d.adjInRange.map(a=>[a.date, a.client, a.adjType, a.note||'', a.amount])
+  ]);
+  adjSheet['!cols'] = [{wch:12},{wch:20},{wch:14},{wch:24},{wch:14}];
+
+  const bankSheet = XLSX.utils.aoa_to_sheet([
+    ['Bank Book'],
+    [],
+    ['Date','Description','Credit','Debit','Balance'],
+    ...d.bankLedgerInRange.map(r=>[r.date, r.label, r.credit||0, r.debit||0, r.balance])
+  ]);
+  bankSheet['!cols'] = [{wch:12},{wch:36},{wch:14},{wch:14},{wch:14}];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, summarySheet, 'Summary');
+  XLSX.utils.book_append_sheet(wb, salesSheet, 'Sales');
+  XLSX.utils.book_append_sheet(wb, purchSheet, 'Purchases');
+  XLSX.utils.book_append_sheet(wb, paymentsSheet, 'Client Payments');
+  XLSX.utils.book_append_sheet(wb, purchPaysSheet, 'Vendor Payments');
+  XLSX.utils.book_append_sheet(wb, expSheet, 'Expenses');
+  XLSX.utils.book_append_sheet(wb, advSheet, 'Advances');
+  XLSX.utils.book_append_sheet(wb, adjSheet, 'Adjustments');
+  XLSX.utils.book_append_sheet(wb, bankSheet, 'Bank Book');
+
+  const wbArray = XLSX.write(wb, { type:'array', bookType:'xlsx' });
+  const blob = new Blob([wbArray], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  await saveOrDownload(blob, 'Business-Report-' + fromStr + (toStr!==fromStr?'_to_'+toStr:'') + '.xlsx');
+}
+
+/* ============================= TALLY XML ============================= */
+function xmlEscape(s){
+  return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function tallyDate(iso){ return (iso||'').replace(/-/g,''); }
+function ledgerXml(name, parent){
+  return `<LEDGER NAME="${xmlEscape(name)}" ACTION="Create"><NAME>${xmlEscape(name)}</NAME><PARENT>${xmlEscape(parent)}</PARENT><OPENINGBALANCE>0</OPENINGBALANCE></LEDGER>`;
+}
+function entryXml(ledgerName, amount, isDebit){
+  const amt = isDebit ? -Math.abs(amount) : Math.abs(amount);
+  return `<ALLLEDGERENTRIES.LIST><LEDGERNAME>${xmlEscape(ledgerName)}</LEDGERNAME><ISDEEMEDPOSITIVE>${isDebit?'Yes':'No'}</ISDEEMEDPOSITIVE><AMOUNT>${amt.toFixed(2)}</AMOUNT></ALLLEDGERENTRIES.LIST>`;
+}
+function voucherXml(vchType, date, narration, drLedger, drAmount, crLedger, crAmount){
+  return `<VOUCHER VCHTYPE="${xmlEscape(vchType)}" ACTION="Create"><DATE>${tallyDate(date)}</DATE><EFFECTIVEDATE>${tallyDate(date)}</EFFECTIVEDATE><VOUCHERTYPENAME>${xmlEscape(vchType)}</VOUCHERTYPENAME><NARRATION>${xmlEscape(narration)}</NARRATION>${entryXml(drLedger, drAmount, true)}${entryXml(crLedger, crAmount, false)}</VOUCHER>`;
+}
+
+function buildTallyXml(fromStr, toStr, singleBankLedger, salesLedger, purchaseLedger, accountFilter){
+  accountFilter = accountFilter || 'all';
+  const wantsAcct = row => accountFilter==='all' || row.bankAccountId===accountFilter;
+  const inRange = d => d >= fromStr && d <= toStr;
+  const bankLedgerFor = () => {
+    if(accountFilter==='all') return singleBankLedger;
+    return accountName(accountFilter);
+  };
+
+  const clients = new Set();
+  entries.forEach(e=>{ if(e.kind==='sale' && e.client) clients.add(e.client); });
+  advances.forEach(a=>clients.add(a.client));
+  adjustments.forEach(a=>clients.add(a.client));
+
+  const vendors = new Set();
+  entries.forEach(e=>{ if(e.kind==='purchase' && e.vendor) vendors.add(e.vendor); });
+
+  const expenseTypesUsed = new Set(entries.filter(e=>e.kind==='expense' && inRange(e.date) && (accountFilter==='all' || e.method!=='bank' || wantsAcct(e))).map(e=>e.expenseType||'Expense'));
+  const depositCatsUsed = new Set(bankTransactions.filter(b=>b.type==='deposit' && inRange(b.date) && wantsAcct(b)).map(b=>b.category||'Bank Income'));
+  const withdrawalCatsUsed = new Set(bankTransactions.filter(b=>b.type==='withdrawal' && inRange(b.date) && wantsAcct(b)).map(b=>b.category||'Bank Charges'));
+  const adjTypesUsed = new Set(adjustments.filter(a=>inRange(a.date)).map(a=>a.adjType));
+
+  let masters = '';
+  masters += ledgerXml(salesLedger, 'Sales Accounts');
+  masters += ledgerXml(purchaseLedger, 'Purchase Accounts');
+  if(accountFilter === 'all'){
+    masters += ledgerXml(singleBankLedger, 'Bank Accounts');
+  } else {
+    masters += ledgerXml(accountName(accountFilter), 'Bank Accounts');
+  }
+  masters += ledgerXml('Advances from Customers', 'Current Liabilities');
+  clients.forEach(c => masters += ledgerXml(c, 'Sundry Debtors'));
+  vendors.forEach(v => masters += ledgerXml(v, 'Sundry Creditors'));
+  expenseTypesUsed.forEach(t => masters += ledgerXml(t, 'Indirect Expenses'));
+  depositCatsUsed.forEach(t => masters += ledgerXml(t, /capital/i.test(t) ? 'Capital Account' : 'Indirect Income'));
+  withdrawalCatsUsed.forEach(t => masters += ledgerXml(t, 'Indirect Expenses'));
+  adjTypesUsed.forEach(t=>{
+    const lower = t.toLowerCase();
+    const ledgerName = /discount/.test(lower) ? 'Discount Allowed'
+      : /bad ?debt/.test(lower) ? 'Bad Debts Written Off'
+      : /tds/.test(lower) ? 'TDS Receivable'
+      : /round/.test(lower) ? 'Round Off'
+      : t;
+    const parent = /tds/.test(lower) ? 'Current Assets' : 'Indirect Expenses';
+    masters += ledgerXml(ledgerName, parent);
+  });
+
+  function adjLedgerFor(adjType){
+    const lower = adjType.toLowerCase();
+    if(/discount/.test(lower)) return 'Discount Allowed';
+    if(/bad ?debt/.test(lower)) return 'Bad Debts Written Off';
+    if(/tds/.test(lower)) return 'TDS Receivable';
+    if(/round/.test(lower)) return 'Round Off';
+    return adjType;
+  }
+
+  let vouchers = '';
+
+  // Sales
+  entries.filter(e=>e.kind==='sale' && inRange(e.date)).forEach(e=>{
+    const narr = `Sale entry #${e.id} - ${e.qty||''} x ${e.itemType||''} @ ${e.rate||''}${e.note?(' - '+e.note):''}`;
+    vouchers += voucherXml('Sales', e.date, narr, e.client, e.amount, salesLedger, e.amount);
+  });
+
+  // Purchases
+  entries.filter(e=>e.kind==='purchase' && inRange(e.date)).forEach(e=>{
+    const narr = `Purchase entry #${e.id} - ${e.qty||''} x ${e.itemType||''} @ ${e.rate||''}${e.note?(' - '+e.note):''}`;
+    vouchers += voucherXml('Purchase', e.date, narr, purchaseLedger, e.amount, e.vendor, e.amount);
+  });
+
+  // Client receipts
+  const saleIds = new Set(entries.filter(e=>e.kind==='sale').map(e=>e.id));
+  payments.filter(p=>inRange(p.date) && (p.method==='cash'||p.method==='bank') && saleIds.has(p.entryId) && (p.method!=='bank' || wantsAcct(p))).forEach(p=>{
+    const e = entries.find(x=>x.id===p.entryId);
+    const narr = `Receipt against sale #${p.entryId}${e?(' from '+e.client):''}`;
+    const drLedger = p.method==='cash' ? 'Cash' : bankLedgerFor(p.bankAccountId);
+    vouchers += voucherXml('Receipt', p.date, narr, drLedger, p.amount, e?e.client:'Sundry Debtors', p.amount);
+  });
+
+  // Advance applied to sale
+  payments.filter(p=>inRange(p.date) && p.method==='advance').forEach(p=>{
+    const e = entries.find(x=>x.id===p.entryId);
+    const narr = `Advance applied to sale #${p.entryId}${e?(' - '+e.client):''}`;
+    vouchers += voucherXml('Journal', p.date, narr, 'Advances from Customers', p.amount, e?e.client:'Sundry Debtors', p.amount);
+  });
+
+  // Vendor payments
+  const purchIds = new Set(entries.filter(e=>e.kind==='purchase').map(e=>e.id));
+  payments.filter(p=>inRange(p.date) && (p.method==='cash'||p.method==='bank') && purchIds.has(p.entryId) && (p.method!=='bank' || wantsAcct(p))).forEach(p=>{
+    const e = entries.find(x=>x.id===p.entryId);
+    const narr = `Payment against purchase #${p.entryId}${e?(' to '+e.vendor):''}`;
+    const crLedger = p.method==='cash' ? 'Cash' : bankLedgerFor(p.bankAccountId);
+    vouchers += voucherXml('Payment', p.date, narr, e?e.vendor:'Sundry Creditors', p.amount, crLedger, p.amount);
+  });
+
+  // Advances received
+  advances.filter(a=>inRange(a.date) && (a.method!=='bank' || wantsAcct(a))).forEach(a=>{
+    const narr = `Advance received from ${a.client}${a.note?(' - '+a.note):''}`;
+    const drLedger = a.method==='cash' ? 'Cash' : bankLedgerFor(a.bankAccountId);
+    vouchers += voucherXml('Receipt', a.date, narr, drLedger, a.amount, 'Advances from Customers', a.amount);
+  });
+
+  // Expenses
+  entries.filter(e=>e.kind==='expense' && inRange(e.date) && (e.method!=='bank' || wantsAcct(e))).forEach(e=>{
+    const narr = `Expense #${e.id} - ${e.expenseType||''}${e.note?(' - '+e.note):''}${e.linkedSaleId?(' (from sale #'+e.linkedSaleId+')'):''}`;
+    const crLedger = e.method==='cash' ? 'Cash' : bankLedgerFor(e.bankAccountId);
+    vouchers += voucherXml('Payment', e.date, narr, e.expenseType||'Expense', e.amount, crLedger, e.amount);
+  });
+
+  // Bank transactions
+  bankTransactions.filter(b=>inRange(b.date) && wantsAcct(b)).forEach(b=>{
+    const bankName = bankLedgerFor(b.bankAccountId);
+    if(b.type==='deposit'){
+      const narr = `Bank deposit - ${b.category||''}${b.note?(' - '+b.note):''}`;
+      vouchers += voucherXml('Receipt', b.date, narr, bankName, b.amount, b.category||'Bank Income', b.amount);
+    } else if(b.type==='withdrawal'){
+      const narr = `Bank withdrawal - ${b.category||''}${b.note?(' - '+b.note):''}`;
+      vouchers += voucherXml('Payment', b.date, narr, b.category||'Bank Charges', b.amount, bankName, b.amount);
+    } else if(b.type==='cash_to_bank'){
+      vouchers += voucherXml('Contra', b.date, 'Cash deposited to bank' + (b.note?(' - '+b.note):''), bankName, b.amount, 'Cash', b.amount);
+    } else if(b.type==='bank_to_cash'){
+      vouchers += voucherXml('Contra', b.date, 'Cash withdrawn from bank' + (b.note?(' - '+b.note):''), 'Cash', b.amount, bankName, b.amount);
+    }
+  });
+
+  // Client adjustments
+  adjustments.filter(a=>inRange(a.date)).forEach(a=>{
+    const narr = `${a.adjType} - ${a.client}${a.note?(' - '+a.note):''}`;
+    vouchers += voucherXml('Journal', a.date, narr, adjLedgerFor(a.adjType), a.amount, a.client, a.amount);
+  });
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<ENVELOPE>
+<HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>
+<BODY><IMPORTDATA>
+<REQUESTDESC><REPORTNAME>Vouchers</REPORTNAME></REQUESTDESC>
+<REQUESTDATA>
+<TALLYMESSAGE xmlns:UDF="TallyUDF">
+${masters}
+</TALLYMESSAGE>
+<TALLYMESSAGE xmlns:UDF="TallyUDF">
+${vouchers}
+</TALLYMESSAGE>
+</REQUESTDATA>
+</IMPORTDATA></BODY>
+</ENVELOPE>`;
+}
+
+async function downloadTally(){
+  const { fromStr, toStr } = readRange();
+  const accountFilter = document.getElementById('reportBankAccount').value || 'all';
+  const singleBankLedger = document.getElementById('tallyBankLedger').value.trim() || 'Bank Account';
+  const salesLedger = document.getElementById('tallySalesLedger').value.trim() || 'Sales Account';
+  const purchaseLedger = document.getElementById('tallyPurchaseLedger').value.trim() || 'Purchase Account';
+  const xml = buildTallyXml(fromStr, toStr, singleBankLedger, salesLedger, purchaseLedger, accountFilter);
+  const blob = new Blob([xml], { type: 'text/xml' });
+  await saveOrDownload(blob, 'Tally-Import-' + fromStr + (toStr!==fromStr?'_to_'+toStr:'') + '.xml');
+}
+
+async function saveOrDownload(blob, filename){
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+</script>
+</body>
+</html>
