@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Sales & Expense Tracker"
+description = "A deployable accounting tracker for Shree Balaji Associates with sales, purchases, expenses, advances, payments, bank accounts, ledgers, backups, and reports."
+version = "1.0.0"
+id = "artifacts/sales-expense-tracker"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 25946
+
+[services.development]
+run = "pnpm --filter @workspace/sales-expense-tracker run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/sales-expense-tracker", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/sales-expense-tracker/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "25946"
+BASE_PATH = "/"
